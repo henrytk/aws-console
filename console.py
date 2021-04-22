@@ -1,6 +1,6 @@
 import sys
 
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
@@ -9,6 +9,8 @@ from prompt_toolkit.shortcuts import print_container
 from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.shortcuts import set_title, clear_title
 import boto3
+
+SERVICES = ["ec2", "s3"]
 
 class AWSConsole():
     def __init__(self):
@@ -46,10 +48,7 @@ class AWSConsole():
 class AWSPrompt():
     def __init__(self):
         self.completer = WordCompleter(
-            [
-                "EC2",
-                "S3",
-            ],
+            SERVICES,
             ignore_case=True,
         )
         self.prompt = FormattedText([("fg:Orange", "AWS > ")])
@@ -66,16 +65,62 @@ class AWSPrompt():
     def run(self):
         while True:
             try:
-                text = self.session.prompt(self.prompt, placeholder=self.placeholder)
+                service_selection = self.session.prompt(self.prompt, placeholder=self.placeholder)
+                service_prompt = load_service_prompt(service_selection)
+                service_prompt.run()
+            except ServiceSelectionError:
+                print_formatted_text(FormattedText([("fg:Red", "Service {} not recognised".format(service_selection))]))
+                print_formatted_text(FormattedText([("fg:Red", "Must be one of: {}".format(", ".join(SERVICES)))]))
             except KeyboardInterrupt:
                 continue  # Control-C pressed. Try again.
             except EOFError:
                 break  # Control-D pressed.
 
-def main():
+class ServiceEC2Prompt():
+    def __init__(self):
+        self.completer = WordCompleter(
+            [
+                "Instances",
+                "Volumes",
+            ],
+            ignore_case=True,
+        )
+        self.prompt = FormattedText([("fg:Orange", "AWS > EC2 > ")])
+        self.placeholder = FormattedText([("fg:DimGrey", "Enter a resource, for example: Instances")])
+
+
+        self.session = PromptSession(
+            history=InMemoryHistory(),
+            auto_suggest=AutoSuggestFromHistory(),
+            enable_history_search=True,
+            completer=self.completer,
+        )
+
+    def run(self):
+        while True:
+            try:
+                resource_selection = self.session.prompt(self.prompt, placeholder=self.placeholder)
+                print(resource_selection)
+            except KeyboardInterrupt:
+                continue  # Control-C pressed. Try again.
+            except EOFError:
+                break  # Control-D pressed.
+
+
+class ServiceSelectionError(Exception):
+    pass
+
+def load_service_prompt(service_name):
+    service_names_to_prompts = {
+        "ec2": ServiceEC2Prompt,
+    }
+    try:
+        service_prompt_class = service_names_to_prompts[service_name.lower()]
+    except KeyError:
+        raise ServiceSelectionError
+    return service_prompt_class()
+
+if __name__ == '__main__':
     aws_console = AWSConsole()
     aws_console.run()
     aws_console.exit()
-
-if __name__ == '__main__':
-    main()
