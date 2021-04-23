@@ -10,13 +10,72 @@ from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.shortcuts import set_title, clear_title
 import boto3
 
-SERVICES = ["ec2", "s3"]
 
-class AWSConsole():
+class EC2InstancesDescriber():
+    def run(args):
+        client = boto3.client("ec2")
+        print(client.describe_instances())
+
+
+CONSOLE_MAP = {
+    # Structure:
+    # AWS -> Services -> Resources -> Actions
+    "aws": {
+        "ec2": {
+            "instances": {
+                "describe": ec2_instances_list
+            }
+        }
+    }
+}
+
+
+class Path():
+    def __init__(self, path):
+        self.path = path
+        self.choices = self.build_choices()
+        self.prompt = self.build_prompt()
+        self.placeholder = self.build_placeholder()
+        self.completer = self.build_completer()
+        self.aws_api_function = None
+
+
+    def build_choices(self):
+        console_map = CONSOLE_MAP.copy()
+        for p in self.path:
+            try:
+                console_map = console_map[p]
+            except KeyError as key_error:
+                print("Error: malformed path looked up in console map")
+                print(key_error)
+                sys.exit(1)
+        return console_map.keys()
+
+
+    def build_prompt(self):
+        prompt = "".join([path_bit + " > " for path_bit in self.path])
+        return FormattedText([("fg:Orange", prompt)])
+
+
+    def build_placeholder(self):
+        return FormattedText([("fg:DimGrey", " | ".join(self.choices))])
+
+
+    def build_completer(self):
+        return WordCompleter(self.choices, ignore_case=True)
+
+
+    def selection_is_valid(self, selection):
+        if selection not in self.choices:
+            return False
+        return True
+
+
+class ConsoleRunner():
     def __init__(self):
+        self.initial_path = ["aws"]
         set_title("AWS Console")
-        AWSConsole.print_context()
-        self.prompt_stack = []
+        ConsoleRunner.print_context()
 
     @staticmethod
     def print_context():
@@ -38,89 +97,43 @@ class AWSConsole():
         )
 
     def run(self):
-        self.prompt_stack.append(AWSPrompt())
-        self.prompt_stack[0].run()
+        run_prompt(Path(self.initial_path))
 
     def exit(self):
         clear_title()
         print("GoodBye!")
 
-class AWSPrompt():
-    def __init__(self):
-        self.completer = WordCompleter(
-            SERVICES,
-            ignore_case=True,
-        )
-        self.prompt = FormattedText([("fg:Orange", "AWS > ")])
-        self.placeholder = FormattedText([("fg:DimGrey", "Enter AWS service, for example: ec2")])
+def run_prompt(path):
+    session = PromptSession(
+        history=InMemoryHistory(),
+        auto_suggest=AutoSuggestFromHistory(),
+        enable_history_search=True,
+        completer=path.completer,
+    )
+    while True:
+        try:
+            selection = session.prompt(path.prompt, placeholder=path.placeholder)
+            if not path.selection_is_valid(selection):
+                raise SelectionError(path, selection)
+            child_path = path.path.copy()
+            child_path.append(selection.lower())
+            run_prompt(Path(child_path))
+        except SelectionError as selection_error:
+            print_formatted_text(FormattedText([("fg:Red", str(selection_error))]))
+            continue
+        except KeyboardInterrupt:
+            continue  # Control-C pressed. Try again.
+        except EOFError:
+            break  # Control-D pressed.
 
 
-        self.session = PromptSession(
-            history=InMemoryHistory(),
-            auto_suggest=AutoSuggestFromHistory(),
-            enable_history_search=True,
-            completer=self.completer,
-        )
+class SelectionError(Exception):
+    def __init__(self, path, selection):
+        self.message = "Invalid selection: {}\nChoices: {}".format(selection, ", ".join(path.choices))
+        super().__init__(self.message)
 
-    def run(self):
-        while True:
-            try:
-                service_selection = self.session.prompt(self.prompt, placeholder=self.placeholder)
-                service_prompt = load_service_prompt(service_selection)
-                service_prompt.run()
-            except ServiceSelectionError:
-                print_formatted_text(FormattedText([("fg:Red", "Service {} not recognised".format(service_selection))]))
-                print_formatted_text(FormattedText([("fg:Red", "Must be one of: {}".format(", ".join(SERVICES)))]))
-            except KeyboardInterrupt:
-                continue  # Control-C pressed. Try again.
-            except EOFError:
-                break  # Control-D pressed.
-
-class ServiceEC2Prompt():
-    def __init__(self):
-        self.completer = WordCompleter(
-            [
-                "Instances",
-                "Volumes",
-            ],
-            ignore_case=True,
-        )
-        self.prompt = FormattedText([("fg:Orange", "AWS > EC2 > ")])
-        self.placeholder = FormattedText([("fg:DimGrey", "Enter a resource, for example: Instances")])
-
-
-        self.session = PromptSession(
-            history=InMemoryHistory(),
-            auto_suggest=AutoSuggestFromHistory(),
-            enable_history_search=True,
-            completer=self.completer,
-        )
-
-    def run(self):
-        while True:
-            try:
-                resource_selection = self.session.prompt(self.prompt, placeholder=self.placeholder)
-                print(resource_selection)
-            except KeyboardInterrupt:
-                continue  # Control-C pressed. Try again.
-            except EOFError:
-                break  # Control-D pressed.
-
-
-class ServiceSelectionError(Exception):
-    pass
-
-def load_service_prompt(service_name):
-    service_names_to_prompts = {
-        "ec2": ServiceEC2Prompt,
-    }
-    try:
-        service_prompt_class = service_names_to_prompts[service_name.lower()]
-    except KeyError:
-        raise ServiceSelectionError
-    return service_prompt_class()
 
 if __name__ == '__main__':
-    aws_console = AWSConsole()
-    aws_console.run()
-    aws_console.exit()
+    console_runner = ConsoleRunner()
+    console_runner.run()
+    console_runner.exit()
